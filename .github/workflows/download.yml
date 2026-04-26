@@ -13,7 +13,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install aria2
+      - name: Install tools
         run: sudo apt-get install -y aria2 zip
 
       - name: Download files
@@ -21,31 +21,65 @@ jobs:
           MSG=$(git log -1 --pretty=%B)
           echo "Commit message: $MSG"
 
-          # استخراج لینک از پیام
-          if echo "$MSG" | grep -q "download:"; then
-            URLS=$(echo "$MSG" | sed 's/.*download://')
-          elif echo "$MSG" | grep -q "download-zip:"; then
-            URLS=$(echo "$MSG" | sed 's/.*download-zip://')
+          # تشخیص حالت
+          if echo "$MSG" | grep -q "download-zip:"; then
+            MODE="zip"
+            CMD=$(echo "$MSG" | sed 's/.*download-zip://')
+          elif echo "$MSG" | grep -q "download:"; then
+            MODE="normal"
+            CMD=$(echo "$MSG" | sed 's/.*download://')
           else
-            echo "No download command found"
+            echo "❌ No download command"
             exit 1
           fi
 
           mkdir -p downloads
 
-          # دانلود هر لینک
-          for URL in $URLS; do
-            # حذف کاراکترهای اضافی
-            URL=$(echo "$URL" | tr -d '>')
-            
-            # گرفتن نام فایل
-            FILENAME=$(basename "$URL")
-            
-            echo "Downloading: $URL"
-            
-            # دانلود با wget (ساده‌تر و مطمئن‌تر)
-            wget -O "downloads/$FILENAME" "$URL" || curl -L -o "downloads/$FILENAME" "$URL"
+          # پردازش جفت‌های لینک و پوشه
+          echo "$CMD" | while IFS= read -ra PARTS; do
+            for PART in "${PARTS[@]}"; do
+              # چک کردن وجود جداکننده --
+              if [[ "$PART" == *"--"* ]]; then
+                URL=$(echo "$PART" | cut -d'-' -f1 | xargs)
+                FOLDER=$(echo "$PART" | cut -d'-' -f2 | xargs)
+                # حذف > اگر وجود داشت
+                URL=$(echo "$URL" | sed 's/>//g')
+              else
+                URL="$PART"
+                FOLDER=""
+              fi
+
+              # پرش از متغیرهای خالی
+              [ -z "$URL" ] && continue
+              
+              # گرفتن نام فایل
+              FILENAME=$(basename "$URL")
+              
+              # تعیین مسیر نهایی
+              if [ -n "$FOLDER" ]; then
+                mkdir -p "downloads/$FOLDER"
+                OUTPUT="downloads/$FOLDER/$FILENAME"
+              else
+                OUTPUT="downloads/$FILENAME"
+              fi
+              
+              echo "⬇️ Downloading: $URL"
+              echo "📁 Saving to: $OUTPUT"
+              
+              # دانلود
+              wget -O "$OUTPUT" "$URL" 2>/dev/null || curl -L -o "$OUTPUT" "$URL"
+            done
           done
+
+          # اگر حالت زیپ بود، همه رو زیپ کن
+          if [ "$MODE" = "zip" ] && [ -n "$(ls -A downloads 2>/dev/null)" ]; then
+            ZIP_NAME="archive_$(date +%Y%m%d_%H%M%S).zip"
+            echo "📦 Creating $ZIP_NAME"
+            cd downloads
+            zip -r "../$ZIP_NAME" .
+            cd ..
+            mv "$ZIP_NAME" downloads/
+          fi
 
       - name: Push changes
         run: |
