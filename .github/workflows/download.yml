@@ -1,0 +1,68 @@
+name: Download from Commit
+on:
+  push:
+    branches:
+      - "**"
+
+jobs:
+  save-file:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install aria2
+        run: sudo apt-get install -y aria2
+
+      - name: Extract URLs and download files
+        run: |
+          MSG=$(git log -1 --pretty=%B)
+          echo "Commit message: $MSG"
+
+          if echo "$MSG" | grep -qP 'download-zip:'; then
+            MODE="zip"
+            URL_LINE=$(echo "$MSG" | grep -oP 'download-zip:\s*\K.*')
+          elif echo "$MSG" | grep -qP 'download:'; then
+            MODE="normal"
+            URL_LINE=$(echo "$MSG" | grep -oP 'download:\s*\K.*')
+          else
+            echo "❌ No download command found in commit message"
+            exit 1
+          fi
+
+          mkdir -p downloads tmp_downloads
+          
+          for URL in $URL_LINE; do
+            FILENAME=$(basename "$URL")
+            aria2c --split=2 --max-connection-per-server=2 --dir="tmp_downloads" "$URL"
+          done
+
+          if [ "$MODE" = "zip" ]; then
+            ARCHIVE_NAME="tmp_downloads/archive_$(date +%Y%m%d_%H%M%S).zip"
+            zip -j "$ARCHIVE_NAME" tmp_downloads/*
+          fi
+
+          for FILE in tmp_downloads/*; do
+            [ -f "$FILE" ] || continue
+            SIZE=$(stat -c%s "$FILE")
+            LIMIT=$((90 * 1024 * 1024))
+            BASENAME=$(basename "$FILE")
+
+            if [ "$SIZE" -gt "$LIMIT" ]; then
+              zip -s 90m "downloads/${BASENAME}.zip" -j "$FILE"
+            else
+              cp "$FILE" "downloads/$BASENAME"
+            fi
+          done
+
+          rm -rf tmp_downloads
+
+      - name: Commit & Push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add downloads/
+          git commit -m "Add downloaded files from commit [skip ci]" || echo "Nothing to commit"
+          git push
